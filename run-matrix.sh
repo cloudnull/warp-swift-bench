@@ -144,7 +144,11 @@ run_matrix() {
   need_credentials
   docker image inspect "$IMAGE" >/dev/null 2>&1 || die "image $IMAGE not found; run: docker build -t $IMAGE $HERE"
 
-  RUN_DIR=$RESULTS_ROOT/$(date -u +%Y%m%dT%H%M%SZ)$( [ "$SMOKE" = 1 ] && echo -smoke )
+  # Not "$( [ ... ] && echo )": under set -e a failed test inside a bare
+  # assignment's command substitution silently ends the script.
+  local suffix=
+  if [ "$SMOKE" = 1 ]; then suffix=-smoke; fi
+  RUN_DIR=$RESULTS_ROOT/$(date -u +%Y%m%dT%H%M%SZ)$suffix
   mkdir -p "$RUN_DIR"
   echo "run directory: $RUN_DIR"
   printf 'id\tmode\tbucket\tobj_size\tobjects\tconcurrent\textra\tstatus\tseconds\n' >"$RUN_DIR/manifest.tsv"
