@@ -54,6 +54,58 @@ directory. Re-analyze one later with:
 docker run --rm -v "$PWD/results:/data" warp-swift-bench analyze "warp-mixed-2026-09-10[145340]-rZto.json.zst"
 ```
 
+## Running the AI-workload matrix
+
+`run-matrix.sh` runs twenty variants that mirror how AI workloads hit object
+storage, then aggregates every result file into one table:
+
+| Family | Mode | Sizes | What it models |
+|--------|------|-------|----------------|
+| `kv-*` | mixed, PUT-heavy | 8, 32, 64 MiB, with and without multipart | LMCache KV-cache offload |
+| `wt-*` | get, whole and 64 MiB ranges | 1 GiB | safetensors weight loading |
+| `ds-shard-*` | get | 256 MiB | tokenized / WebDataset shards |
+| `ds-sample-*` | get, random sizes | up to 4 MiB | raw training samples |
+| `meta-*` | mixed | 4 KiB, 64 KiB | manifests, indexes, tokenizer files |
+| `list-*` | list | 1 KiB | dataset enumeration |
+
+```sh
+export WARP_HOST=swift.api.sjc3.rackspacecloud.com WARP_REGION=SJC3
+export WARP_ACCESS_KEY WARP_SECRET_KEY        # set with read -rs as above
+
+./run-matrix.sh --list                        # show the matrix
+./run-matrix.sh --smoke                       # 10s runs, few objects: check the pipeline
+./run-matrix.sh                               # the real thing, 2 minutes per variant
+./run-matrix.sh --only 'kv-*' --duration 5m   # a subset, longer
+./run-matrix.sh --aggregate results/<dir>     # re-aggregate an existing run
+```
+
+Each invocation writes `results/<UTC timestamp>/` containing `<id>.json.zst`
+and `<id>.log` per variant, `manifest.tsv`, `analysis/<id>.json` from
+`warp analyze --json`, and three aggregates that are also printed at the end:
+
+- `tps.csv`: one row per variant with TPS (successful S3 operations per
+  second in warp's trimmed window), split into read (GET + STAT), write
+  (PUT + DELETE) and list, plus MiB/s and errors.
+- `summary.csv`: one row per variant and operation with TPS, throughput,
+  and request latency percentiles including time to first byte.
+- `summary.md`: both tables as Markdown.
+
+A multipart upload counts as one PUT transaction regardless of part count, so
+s3api sees more HTTP requests than the TPS figure for objects above 16 MiB.
+A failed variant is recorded in the manifest and the rest of the matrix
+continues. Errors inside a run are counted per operation and the first
+message is listed under "Errors" in the summary.
+
+The script empties every bucket it used when it finishes. If the endpoint
+returns a sporadic auth error during that sweep, a few objects can remain;
+`./run-matrix.sh --smoke --only list-1kib-c16` clears the main bucket again.
+
+The `get` families share one bucket per object size (`warp-get-1gib`,
+`warp-get-256mib`, `warp-get-4mib`): the first variant uploads the objects,
+later ones reuse them with `--list-existing`, and the bucket is emptied at
+the end. A full run pre-uploads roughly 40 GiB in total and takes about an
+hour at 2 minutes per variant.
+
 ## Environment
 
 | Variable          | Default                 | Notes |
